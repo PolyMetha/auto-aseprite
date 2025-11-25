@@ -1,23 +1,101 @@
-name: Publish Release Only
+name: Auto build Aseprite
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  publish-release:
-    runs-on: ubuntu-latest
+  auto-build:
+    runs-on: windows-2022
+
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Python requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Aseprite
+        run: python download.py
+
+      - name: Setup Ninja
+        uses: ashutoshvarma/setup-ninja@v1.1
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: TheMrMilchmann/setup-msvc-dev@v3
+        with:
+          arch: x64
+
+      - name: Build Aseprite
+        run: |
+          mkdir build
+          cd build
+          cmake "${{ github.workspace }}/src/aseprite" -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel -DLAF_BACKEND=skia -DSKIA_DIR="${{ github.workspace }}/src/skia" -DSKIA_LIBRARY_DIR="${{ github.workspace }}/src/skia/out/Release-x64" -DSKIA_LIBRARY="${{ github.workspace }}/src/skia/out/Release-x64/skia.lib"
+          cmake --build . --config MinSizeRel --target aseprite
+
+      - name: Get version
+        id: get_version
+        run: |
+          $v = Get-Content version.txt
+          echo "version=$($v.Trim())" >> $env:GITHUB_OUTPUT
+
+      - name: Zip build
+        run: |
+          cd build/bin
+          7z a ../../Aseprite-Windows-x64-${{ steps.get_version.outputs.version }}.zip *
+
+      # --- CREATE RELEASE ---------------------------------------------------------
       - name: Create Release (API)
+        id: create_release
         env:
-          TAG: "v1.3.15.4"
+          TAG: ${{ steps.get_version.outputs.version }}
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          echo "Creating release for tag $TAG"
+          echo "Creating release for TAG = $env:TAG"
 
-          curl -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/releases \
-            -d "{\"tag_name\": \"$TAG\", \"name\": \"Release $TAG\"}"
+          $body = @{
+            tag_name = $env:TAG
+            name     = "Aseprite-Windows-x64-$($env:TAG)"
+            draft    = $false
+            prerelease = $false
+          } | ConvertTo-Json
+
+          $response = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/releases" `
+            -Method POST `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; "Accept" = "application/vnd.github+json" } `
+            -Body $body
+
+          echo "release_id=$($response.id)" >> $env:GITHUB_OUTPUT
+
+      # --- UPLOAD ASSET ----------------------------------------------------------
+      - name: Upload asset (API)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.get_version.outputs.version }}
+        run: |
+          $id = "${{ steps.create_release.outputs.release_id }}"
+          $file = "Aseprite-Windows-x64-$env:TAG.zip"
+
+          echo "Uploading file: $file"
+          echo "TAG = $env:TAG"
+          echo "Release ID = $id"
+
+          # Vérification que le fichier ZIP existe
+          if (!(Test-Path $file)) {
+            Write-Error "❌ Zip not found: $file"
+            Write-Host "📁 Current directory content:"
+            Get-ChildItem -Force
+            exit 1
+          }
+
+          curl -X POST `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary @$file `
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/$id/assets?name=$file"
