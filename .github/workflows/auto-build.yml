@@ -1,20 +1,23 @@
-- name: Create Release (API)
-  id: create_release
-  env:
-    TAG: ${{ steps.get_version.outputs.version }}
-    GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-  run: |
-    $body = @{
-      tag_name = $env:TAG
-      name     = "Aseprite-Windows-x64-$($env:TAG)"
-      draft    = $false
-      prerelease = $false
-    } | ConvertTo-Json
+name: Publish Release Only
 
-    $response = Invoke-RestMethod `
-      -Uri "https://api.github.com/repos/${{ github.repository }}/releases" `
-      -Method POST `
-      -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; "Accept" = "application/vnd.github+json" } `
-      -Body $body
+on:
+  workflow_dispatch:
 
-    echo "release_id=$($response.id)" >> $env:GITHUB_OUTPUT
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release (API)
+        env:
+          TAG: "v1.3.15.4"
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          echo "Creating release for tag $TAG"
+
+          curl -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -d "{\"tag_name\": \"$TAG\", \"name\": \"Release $TAG\"}"
