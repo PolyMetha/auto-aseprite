@@ -2,12 +2,14 @@ name: Auto build Aseprite
 
 on:
   push:
-    branches: main
+    branches: [main]
 
   workflow_dispatch:
 
 permissions:
   contents: write
+  id-token: write
+  actions: read
 
 jobs:
   auto-build:
@@ -41,7 +43,6 @@ jobs:
           cd build
           cmake "${{ github.workspace }}/src/aseprite" -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel -DLAF_BACKEND=skia -DSKIA_DIR="${{ github.workspace }}/src/skia" -DSKIA_LIBRARY_DIR="${{ github.workspace }}/src/skia/out/Release-x64" -DSKIA_LIBRARY="${{ github.workspace }}/src/skia/out/Release-x64/skia.lib"
           cmake --build . --config MinSizeRel --target aseprite
-          # copy "C:/Windows/System32/libcrypto-3-x64.dll" ./bin
 
       - name: Get version
         id: get_version
@@ -54,6 +55,15 @@ jobs:
           cd build/bin
           7z a ../../Aseprite-Windows-x64-${{ steps.get_version.outputs.version }}.zip *
 
+      # 🔥 IMPORTANT : créer le tag manuellement (évite 90% des erreurs de release)
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f ${{ steps.get_version.outputs.version }}
+          git push origin --force --tags
+
+      # 🔥 Le release final → version stable
       - name: GH Release
         uses: softprops/action-gh-release@v1
         with:
