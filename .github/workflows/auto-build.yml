@@ -3,28 +3,17 @@ name: Auto build Aseprite
 on:
   push:
     branches: [main]
-
   workflow_dispatch:
 
 permissions:
   contents: write
-  id-token: write
-  actions: read
 
 jobs:
   auto-build:
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-  
-    name: Auto build Aseprite for Windows x64
     runs-on: windows-2022
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install Python requirements
         run: |
@@ -32,8 +21,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download Aseprite
-        run: |
-          python download.py
+        run: python download.py
 
       - name: Setup Ninja
         uses: ashutoshvarma/setup-ninja@v1.1
@@ -53,27 +41,47 @@ jobs:
       - name: Get version
         id: get_version
         run: |
-          $version = Get-Content version.txt
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+          $v = Get-Content version.txt
+          echo "version=$($v.Trim())" >> $env:GITHUB_OUTPUT
 
-      - name: Zip Aseprite
+      - name: Zip build
         run: |
           cd build/bin
           7z a ../../Aseprite-Windows-x64-${{ steps.get_version.outputs.version }}.zip *
 
-      # 🔥 IMPORTANT : créer le tag manuellement (évite 90% des erreurs de release)
-      - name: Create tag
+      # 👉 CRÉATION DE LA RELEASE EN API DIRECTE (évite totalement le bug author_id)
+      - name: Create Release (API)
+        id: create_release
+        env:
+          TAG: ${{ steps.get_version.outputs.version }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f ${{ steps.get_version.outputs.version }}
-          git push origin --force --tags
+          $body = @{
+            tag_name = $env:TAG
+            name     = "Aseprite-Windows-x64-$($env:TAG)"
+            draft    = $false
+            prerelease = $false
+          } | ConvertTo-Json
 
-      # 🔥 Le release final → version stable
-      - name: GH Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: Aseprite-Windows-x64-${{ steps.get_version.outputs.version }}
-          tag_name: ${{ steps.get_version.outputs.version }}
-          files: |
-            Aseprite-Windows-x64-${{ steps.get_version.outputs.version }}.zip
+          $response = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/releases" `
+            -Method POST `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; "Accept" = "application/vnd.github+json" } `
+            -Body $body
+
+          echo "release_id=$($response.id)" >> $env:GITHUB_OUTPUT
+
+      # 👉 UPLOAD DU ZIP SUR LA RELEASE VIA API DIRECTE
+      - name: Upload asset (API)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.get_version.outputs.version }}
+        run: |
+          $id = "${{ steps.create_release.outputs.release_id }}"
+          $file = "Aseprite-Windows-x64-$TAG.zip"
+
+          curl -X POST `
+            -H "Authorization: Bearer $GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary @$file `
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/$id/assets?name=$file"
