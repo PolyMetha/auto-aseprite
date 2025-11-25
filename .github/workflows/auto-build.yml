@@ -13,6 +13,12 @@ permissions:
 
 jobs:
   auto-build:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+  
     name: Auto build Aseprite for Windows x64
     runs-on: windows-2022
 
